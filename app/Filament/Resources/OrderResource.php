@@ -5,27 +5,43 @@ namespace App\Filament\Resources;
 use Filament\Forms;
 use Filament\Tables;
 use App\Models\Order;
+use App\Models\Product;
+use Filament\Forms\Get;
+use Filament\Forms\Set;
 use Filament\Forms\Form;
 use Filament\Tables\Table;
 use Filament\Resources\Resource;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Repeater;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Tables\Actions\ActionGroup;
+
 use Illuminate\Database\Eloquent\Builder;
+use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\ToggleButtons;
 use App\Filament\Resources\OrderResource\Pages;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use App\Filament\Resources\OrderResource\RelationManagers;
-
-use App\Models\Product;
 
 class OrderResource extends Resource
 {
     protected static ?string $model = Order::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-rectangle-stack';
+
+    public static function getNavigationBadge(): ?string
+    {
+        return static::getModel()::count();
+    }
+
+    public static function getNavigationBadgeColor() : array|string|null
+    {
+        return static::getModel()::count() > 10 ? 'success' : 'danger';
+    }
+
 
     public static function form(Form $form): Form
     {
@@ -42,6 +58,11 @@ class OrderResource extends Resource
 
                         Select::make('payment_method')
                             ->label('Payment Method')
+                            ->options([
+                                'cod' => 'Cash on Delivery',
+                                'paypal' => 'Paypal',
+                                'stripe' => 'Stripe',
+                            ])
                             ->required(),
 
                         Select::make('currency')
@@ -95,6 +116,7 @@ class OrderResource extends Resource
                             ->required(),
                     ])->columns(2),
 
+
                 Section::make('Order Items')->schema([
                     Repeater::make('items')
                         ->relationship('orderItems')
@@ -110,7 +132,13 @@ class OrderResource extends Resource
                                 ->columnSpan(4)
                                 ->reactive()
                                 ->afterStateUpdated(function ($state, callable $set)  {
-                                    $set('unit_amount', Product::find($state)->price);
+                                    $set('unit_amount', Product::find($state)->price ?? 0);
+                                })
+                                ->afterStateUpdated(function ($state, callable $set, callable $get) {
+                                    $set('total_amount', $state * $get('unit_amount'));
+                                })
+                                ->afterStateUpdated(function ($state, callable $set, callable $get) {
+                                    $set('quantity', 1);
                                 }),
 
                             TextInput::make('quantity')
@@ -124,10 +152,12 @@ class OrderResource extends Resource
                                     $set('total_amount', $state * $get('unit_amount'));
                                 }),
 
+
                             TextInput::make('unit_amount')
                                 ->required()
                                 ->numeric()
                                 ->disabled()
+                                ->dehydrated()
                                 ->columnSpan(3),
 
                             TextInput::make('total_amount')
@@ -135,23 +165,32 @@ class OrderResource extends Resource
                                 ->minValue(1)
                                 ->required()
                                 ->disabled()
+                                ->dehydrated()
                                 ->columnSpan(3),
                         ])->columns(12),
 
-                        // Select::make('category_id')
-                        //     ->label('Category')
-                        //     ->relationship('category', 'name')
-                        //     ->preload()
-                        //     ->searchable()
-                        //     ->required(),
+                        Placeholder::make('grand_total_placeholder')
+                        ->label('Grand Total')
+                        ->content(function (Get $get, Set $set) {
+                            $total = 0;
 
-                        // Select::make('brand_id')
-                        //     ->label('Brand')
-                        //     ->relationship('brand', 'name')
-                        //     ->preload()
-                        //     ->searchable()
-                        //     ->required(),
-                    ]),
+                            if(!$repeaters = $get('items')) return "Rp. " . number_format($total, 0, '.', '.');
+
+                            foreach ($repeaters as $key => $item) {
+                                $total += $get("items.{$key}.total_amount");
+                            }
+
+                            $set('grand_total', $total);
+
+                            return "Rp. " . number_format($total, 0, '.', '.');
+                        }),
+
+                        Hidden::make('grand_total')
+                            ->dehydrated()
+                            ->default(0),
+                    ])
+
+
             ]);
     }
 
@@ -159,19 +198,51 @@ class OrderResource extends Resource
     {
         return $table
             ->columns([
-                //
+                Tables\Columns\TextColumn::make('user.name')
+                    ->label('Customer')
+                    ->sortable()
+                    ->searchable(),
+
+                Tables\Columns\TextColumn::make('grand_total')
+                    ->money('USD')
+                    ->sortable()
+                    ->searchable(),
+
+                Tables\Columns\TextColumn::make('payment_method')
+                    ->sortable()
+                    ->searchable(),
+
+                Tables\Columns\TextColumn::make('shipping_method')
+                    ->sortable()
+
+                    ->searchable(),
+
+                Tables\Columns\SelectColumn::make('status')
+                    ->options([
+                        'new' => 'New',
+                        'processing' => 'Processing',
+                        'shipped' => 'Shipped',
+                        'delivered' => 'Delivered',
+                        'canceled' => 'Cancelled',
+                    ])
+                    ->sortable()
+                    ->searchable(),
             ])
             ->filters([
                 //
             ])
             ->actions([
-                Tables\Actions\ViewAction::make(),
-                Tables\Actions\EditAction::make(),
+                ActionGroup::make([
+                    Tables\Actions\ViewAction::make(),
+                    Tables\Actions\EditAction::make(),
+                    Tables\Actions\DeleteAction::make(),
+                ]),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\DeleteBulkAction::make(),
                 ]),
+
             ]);
     }
 
